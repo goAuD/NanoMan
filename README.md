@@ -15,10 +15,11 @@ NanoMan is a lightweight, privacy-focused API testing tool. No cloud, no bloat, 
 * **Offline First:** Works without internet connection for local APIs
 * **Privacy Focused:** No telemetry, no cloud, your data stays local
 * **Full HTTP Support:** GET, POST, PUT, PATCH, DELETE methods
-* **JSON Pretty-Print:** Automatic formatting of JSON responses
-* **Custom Headers:** Set any headers for your requests
+* **JSON Syntax Highlighting:** Color-coded JSON responses (keys, strings, numbers)
+* **Request History:** Review and load previous requests with one click
 * **Threaded Requests:** UI never freezes, even on slow connections
 * **Security Focused:** Strict URL validation (HTTP/HTTPS only)
+* **Request Counter:** Track your session usage
 
 ## Use Cases
 
