@@ -8,6 +8,7 @@ import customtkinter as ctk
 import threading
 import logging
 import json
+import re
 from datetime import datetime
 
 from src.logic import validate_url, send_api_request, format_json, parse_headers
@@ -35,9 +36,12 @@ class NanoManApp(ctk.CTk):
         # History storage (in-memory)
         self.history = []
         
+        # Current tab
+        self.current_tab = "response"
+        
         # Grid layout
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)  # Content area expands
         
         self.create_widgets()
         
@@ -48,7 +52,7 @@ class NanoManApp(ctk.CTk):
         
         # 1. Header
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.header_frame.grid(row=0, column=0, padx=20, pady=(15, 0), sticky="ew")
+        self.header_frame.grid(row=0, column=0, padx=20, pady=(15, 10), sticky="ew")
         
         self.lbl_title = ctk.CTkLabel(
             self.header_frame, 
@@ -74,7 +78,7 @@ class NanoManApp(ctk.CTk):
         
         # 2. Control bar (Method + URL + Send)
         self.control_frame = ctk.CTkFrame(self)
-        self.control_frame.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
+        self.control_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
         self.control_frame.grid_columnconfigure(1, weight=1)
         
         # Method selector
@@ -129,61 +133,48 @@ class NanoManApp(ctk.CTk):
         )
         self.btn_clear.grid(row=0, column=3, padx=5, pady=10)
         
-        # 3. Tabview for Request/Response
-        self.tabview = ctk.CTkTabview(self)
-        self.tabview.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
+        # 3. Custom Tab Bar (separate frame above content)
+        self.tab_bar = ctk.CTkFrame(self, fg_color="transparent")
+        self.tab_bar.grid(row=2, column=0, padx=20, pady=(10, 0), sticky="ew")
         
-        # Create tabs
-        self.tab_response = self.tabview.add("Response")
-        self.tab_body = self.tabview.add("Request Body")
-        self.tab_headers = self.tabview.add("Headers")
-        self.tab_history = self.tabview.add("History")
+        self.tab_buttons = {}
+        tabs = [
+            ("response", "Response"),
+            ("body", "Request Body"),
+            ("headers", "Headers"),
+            ("history", "History")
+        ]
         
-        # Configure tab grids
-        for tab in [self.tab_response, self.tab_body, self.tab_headers, self.tab_history]:
-            tab.grid_columnconfigure(0, weight=1)
-            tab.grid_rowconfigure(0, weight=1)
+        for i, (key, label) in enumerate(tabs):
+            btn = ctk.CTkButton(
+                self.tab_bar,
+                text=label,
+                width=120,
+                height=32,
+                font=("Roboto", 12),
+                fg_color="#2c3e50" if key != "response" else "#3498db",
+                hover_color="#34495e",
+                corner_radius=8,
+                command=lambda k=key: self.switch_tab(k)
+            )
+            btn.pack(side="left", padx=3)
+            self.tab_buttons[key] = btn
         
-        # Response tab
-        self.txt_response = ctk.CTkTextbox(
-            self.tab_response, 
-            font=("Consolas", 13),
-            wrap="word"
-        )
-        self.txt_response.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.txt_response.insert("0.0", "// Response will appear here\n// Press SEND or Enter to make a request\n\n// Try the chseets API:\n// https://chseets.com/api/meta.json\n// https://chseets.com/api/sheets/weiz.json")
+        # 4. Content Area (single frame, content swapped)
+        self.content_frame = ctk.CTkFrame(self)
+        self.content_frame.grid(row=3, column=0, padx=20, pady=10, sticky="nsew")
+        self.content_frame.grid_columnconfigure(0, weight=1)
+        self.content_frame.grid_rowconfigure(0, weight=1)
         
-        # Request body tab
-        self.txt_body = ctk.CTkTextbox(
-            self.tab_body, 
-            font=("Consolas", 13)
-        )
-        self.txt_body.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.txt_body.insert("0.0", '{\n    "key": "value"\n}')
+        # Create all content widgets (hidden initially except response)
+        self._create_response_content()
+        self._create_body_content()
+        self._create_headers_content()
+        self._create_history_content()
         
-        # Headers tab
-        self.txt_headers = ctk.CTkTextbox(
-            self.tab_headers, 
-            font=("Consolas", 13)
-        )
-        self.txt_headers.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.txt_headers.insert("0.0", "Content-Type: application/json")
-        
-        # History tab
-        self.history_frame = ctk.CTkScrollableFrame(self.tab_history)
-        self.history_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.history_frame.grid_columnconfigure(0, weight=1)
-        
-        self.lbl_history_empty = ctk.CTkLabel(
-            self.history_frame,
-            text="No requests yet. Send a request to see history.",
-            text_color="gray"
-        )
-        self.lbl_history_empty.grid(row=0, column=0, pady=20)
-        
-        # 4. Status bar
+        # 5. Status bar
         self.status_frame = ctk.CTkFrame(self, height=35, fg_color="transparent")
-        self.status_frame.grid(row=3, column=0, padx=20, pady=(0, 10), sticky="ew")
+        self.status_frame.grid(row=4, column=0, padx=20, pady=(0, 10), sticky="ew")
         
         self.lbl_status = ctk.CTkLabel(
             self.status_frame, 
@@ -202,6 +193,140 @@ class NanoManApp(ctk.CTk):
             text_color="gray"
         )
         self.lbl_count.pack(side="right")
+    
+    def _create_response_content(self):
+        """Create response tab content."""
+        self.response_frame = ctk.CTkFrame(self.content_frame)
+        self.response_frame.grid(row=0, column=0, sticky="nsew")
+        self.response_frame.grid_columnconfigure(0, weight=1)
+        self.response_frame.grid_rowconfigure(0, weight=1)
+        
+        self.txt_response = ctk.CTkTextbox(
+            self.response_frame, 
+            font=("Consolas", 13),
+            wrap="word"
+        )
+        self.txt_response.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.txt_response.insert("0.0", "// Response will appear here\n// Press SEND or Enter to make a request\n\n// Try the chseets API:\n// https://chseets.com/api/meta.json\n// https://chseets.com/api/sheets/weiz.json")
+    
+    def _create_body_content(self):
+        """Create request body tab content."""
+        self.body_frame = ctk.CTkFrame(self.content_frame)
+        self.body_frame.grid(row=0, column=0, sticky="nsew")
+        self.body_frame.grid_columnconfigure(0, weight=1)
+        self.body_frame.grid_rowconfigure(0, weight=1)
+        
+        self.txt_body = ctk.CTkTextbox(
+            self.body_frame, 
+            font=("Consolas", 13)
+        )
+        self.txt_body.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.txt_body.insert("0.0", '{\n    "key": "value"\n}')
+        
+        self.body_frame.grid_remove()  # Hide initially
+    
+    def _create_headers_content(self):
+        """Create headers tab content."""
+        self.headers_frame = ctk.CTkFrame(self.content_frame)
+        self.headers_frame.grid(row=0, column=0, sticky="nsew")
+        self.headers_frame.grid_columnconfigure(0, weight=1)
+        self.headers_frame.grid_rowconfigure(0, weight=1)
+        
+        self.txt_headers = ctk.CTkTextbox(
+            self.headers_frame, 
+            font=("Consolas", 13)
+        )
+        self.txt_headers.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.txt_headers.insert("0.0", "Content-Type: application/json")
+        
+        self.headers_frame.grid_remove()  # Hide initially
+    
+    def _create_history_content(self):
+        """Create history tab content."""
+        self.history_frame = ctk.CTkScrollableFrame(self.content_frame)
+        self.history_frame.grid(row=0, column=0, sticky="nsew")
+        self.history_frame.grid_columnconfigure(0, weight=1)
+        
+        self.lbl_history_empty = ctk.CTkLabel(
+            self.history_frame,
+            text="No requests yet. Send a request to see history.",
+            text_color="gray"
+        )
+        self.lbl_history_empty.grid(row=0, column=0, pady=20)
+        
+        self.history_frame.grid_remove()  # Hide initially
+    
+    def switch_tab(self, tab_key: str):
+        """Switch between tabs."""
+        self.current_tab = tab_key
+        
+        # Update button colors
+        for key, btn in self.tab_buttons.items():
+            if key == tab_key:
+                btn.configure(fg_color="#3498db")
+            else:
+                btn.configure(fg_color="#2c3e50")
+        
+        # Hide all frames
+        self.response_frame.grid_remove()
+        self.body_frame.grid_remove()
+        self.headers_frame.grid_remove()
+        self.history_frame.grid_remove()
+        
+        # Show selected frame
+        if tab_key == "response":
+            self.response_frame.grid()
+        elif tab_key == "body":
+            self.body_frame.grid()
+        elif tab_key == "headers":
+            self.headers_frame.grid()
+        elif tab_key == "history":
+            self.history_frame.grid()
+    
+    def apply_json_highlighting(self, textbox: ctk.CTkTextbox, content: str):
+        """Apply basic JSON syntax highlighting."""
+        textbox.delete("0.0", "end")
+        textbox.insert("0.0", content)
+        
+        # Define tags (colors)
+        textbox._textbox.tag_configure("key", foreground="#f39c12")      # Orange for keys
+        textbox._textbox.tag_configure("string", foreground="#2ecc71")   # Green for strings  
+        textbox._textbox.tag_configure("number", foreground="#3498db")   # Blue for numbers
+        textbox._textbox.tag_configure("boolean", foreground="#e74c3c")  # Red for booleans
+        textbox._textbox.tag_configure("null", foreground="#9b59b6")     # Purple for null
+        
+        # Apply highlighting
+        lines = content.split('\n')
+        for line_num, line in enumerate(lines, 1):
+            # Keys (before colon)
+            for match in re.finditer(r'"([^"]+)"\s*:', line):
+                start = f"{line_num}.{match.start()}"
+                end = f"{line_num}.{match.end()-1}"
+                textbox._textbox.tag_add("key", start, end)
+            
+            # String values (after colon)
+            for match in re.finditer(r':\s*"([^"]*)"', line):
+                start = f"{line_num}.{match.start() + len(match.group(0)) - len(match.group(1)) - 1}"
+                end = f"{line_num}.{match.end()}"
+                textbox._textbox.tag_add("string", start, end)
+            
+            # Numbers
+            for match in re.finditer(r':\s*(-?\d+\.?\d*)', line):
+                start = f"{line_num}.{match.start(1)}"
+                end = f"{line_num}.{match.end(1)}"
+                textbox._textbox.tag_add("number", start, end)
+            
+            # Booleans
+            for match in re.finditer(r'\b(true|false)\b', line, re.IGNORECASE):
+                start = f"{line_num}.{match.start()}"
+                end = f"{line_num}.{match.end()}"
+                textbox._textbox.tag_add("boolean", start, end)
+            
+            # Null
+            for match in re.finditer(r'\bnull\b', line, re.IGNORECASE):
+                start = f"{line_num}.{match.start()}"
+                end = f"{line_num}.{match.end()}"
+                textbox._textbox.tag_add("null", start, end)
     
     def clear_response(self):
         """Clear the response text."""
@@ -301,7 +426,7 @@ class NanoManApp(ctk.CTk):
         self.method_var.set(method)
         self.entry_url.delete(0, "end")
         self.entry_url.insert(0, url)
-        self.tabview.set("Response")
+        self.switch_tab("response")
         self.lbl_status.configure(text=f"Loaded from history: {method} {url[:50]}...", text_color="#3498db")
     
     def send_request_thread(self):
@@ -338,6 +463,7 @@ class NanoManApp(ctk.CTk):
             status_code = result["status_code"]
             reason = result["reason"]
             elapsed = result["elapsed_seconds"]
+            is_json = result.get("is_json", False)
             
             # Color based on status
             if 200 <= status_code < 300:
@@ -352,15 +478,18 @@ class NanoManApp(ctk.CTk):
                 text_color=color
             )
             
-            # Show response
-            self.txt_response.delete("0.0", "end")
-            self.txt_response.insert("0.0", result["body"])
+            # Show response with syntax highlighting if JSON
+            if is_json:
+                self.apply_json_highlighting(self.txt_response, result["body"])
+            else:
+                self.txt_response.delete("0.0", "end")
+                self.txt_response.insert("0.0", result["body"])
             
             # Add to history
             self.add_to_history(method, url, status_code, elapsed)
             
             # Switch to response tab
-            self.tabview.set("Response")
+            self.switch_tab("response")
         else:
             # Error
             self.lbl_status.configure(
@@ -369,7 +498,7 @@ class NanoManApp(ctk.CTk):
             )
             self.txt_response.delete("0.0", "end")
             self.txt_response.insert("0.0", f"Error:\n{result['error']}")
-            self.tabview.set("Response")
+            self.switch_tab("response")
 
 
 def main():
