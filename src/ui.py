@@ -9,7 +9,9 @@ import threading
 import logging
 import json
 import re
+import os
 from datetime import datetime
+from pathlib import Path
 
 from src.logic import validate_url, send_api_request, format_json, parse_headers
 
@@ -19,7 +21,22 @@ logger = logging.getLogger(__name__)
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
+
+# Constants
+MAX_HIGHLIGHT_LINES = 1000  # Performance limit for syntax highlighting
+MAX_HISTORY_ITEMS = 100  # Max items to persist
+HISTORY_FILE = Path(__file__).parent.parent / "history.json"
+
+# Nano Design System Colors (consistent with NanoServer)
+COLORS = {
+    "success": "#4caf50",      # NanoServer green
+    "danger": "#e74c3c",       # Error red
+    "warning": "#e67e22",      # Warning orange
+    "neutral": "#34495e",      # Neutral gray
+    "primary": "#3498db",      # Blue primary
+    "muted": "gray",           # Muted text
+}
 
 
 class NanoManApp(ctk.CTk):
@@ -33,8 +50,9 @@ class NanoManApp(ctk.CTk):
         self.geometry("1000x800")
         self.minsize(900, 700)
         
-        # History storage (in-memory)
+        # History storage
         self.history = []
+        self.load_history()  # Load from file
         
         # Current tab
         self.current_tab = "response"
@@ -44,6 +62,9 @@ class NanoManApp(ctk.CTk):
         self.grid_rowconfigure(3, weight=1)  # Content area expands
         
         self.create_widgets()
+        
+        # Save history on close
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
         
         logger.info(f"NanoMan v{VERSION} started")
     
@@ -284,16 +305,23 @@ class NanoManApp(ctk.CTk):
             self.history_frame.grid()
     
     def apply_json_highlighting(self, textbox: ctk.CTkTextbox, content: str):
-        """Apply basic JSON syntax highlighting."""
+        """Apply basic JSON syntax highlighting with performance limit."""
         textbox.delete("0.0", "end")
         textbox.insert("0.0", content)
         
-        # Define tags (colors)
-        textbox._textbox.tag_configure("key", foreground="#f39c12")      # Orange for keys
-        textbox._textbox.tag_configure("string", foreground="#2ecc71")   # Green for strings  
-        textbox._textbox.tag_configure("number", foreground="#3498db")   # Blue for numbers
-        textbox._textbox.tag_configure("boolean", foreground="#e74c3c")  # Red for booleans
-        textbox._textbox.tag_configure("null", foreground="#9b59b6")     # Purple for null
+        lines = content.split('\n')
+        
+        # Performance limit: skip highlighting for large JSON
+        if len(lines) > MAX_HIGHLIGHT_LINES:
+            logger.info(f"Skipping highlighting: {len(lines)} lines exceeds limit of {MAX_HIGHLIGHT_LINES}")
+            return
+        
+        # Define tags (colors - aligned with Nano Design System)
+        textbox._textbox.tag_configure("key", foreground=COLORS["warning"])    # Orange for keys
+        textbox._textbox.tag_configure("string", foreground=COLORS["success"]) # Green for strings  
+        textbox._textbox.tag_configure("number", foreground=COLORS["primary"]) # Blue for numbers
+        textbox._textbox.tag_configure("boolean", foreground=COLORS["danger"]) # Red for booleans
+        textbox._textbox.tag_configure("null", foreground="#9b59b6")           # Purple for null
         
         # Apply highlighting
         lines = content.split('\n')
@@ -445,9 +473,8 @@ class NanoManApp(ctk.CTk):
         # Parse headers
         headers = parse_headers(headers_text)
         
-        # Only send payload for methods that support it
-        if method == "GET":
-            payload = None
+        # Allow body for all methods (ElasticSearch uses GET with body)
+        # Trust the developer to know what they're doing
         
         # Make request
         result = send_api_request(method, url, payload, headers)
@@ -499,6 +526,34 @@ class NanoManApp(ctk.CTk):
             self.txt_response.delete("0.0", "end")
             self.txt_response.insert("0.0", f"Error:\n{result['error']}")
             self.switch_tab("response")
+    
+    def load_history(self):
+        """Load history from JSON file."""
+        try:
+            if HISTORY_FILE.exists():
+                with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.history = data.get('history', [])[-MAX_HISTORY_ITEMS:]
+                    logger.info(f"Loaded {len(self.history)} history items")
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Could not load history: {e}")
+            self.history = []
+    
+    def save_history(self):
+        """Save history to JSON file."""
+        try:
+            # Keep only last MAX_HISTORY_ITEMS
+            history_to_save = self.history[-MAX_HISTORY_ITEMS:]
+            with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'history': history_to_save}, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved {len(history_to_save)} history items")
+        except IOError as e:
+            logger.error(f"Could not save history: {e}")
+    
+    def on_close(self):
+        """Handle window close event."""
+        self.save_history()
+        self.destroy()
 
 
 def main():
@@ -513,3 +568,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

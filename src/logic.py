@@ -26,6 +26,8 @@ def validate_url(url: str) -> bool:
     
     Security: Prevents XSS via javascript:, ftp:, file:, data: URLs
     
+    Note: Allows intranet hostnames without TLD (e.g., http://intranet/api)
+    
     Args:
         url: The URL to validate
         
@@ -37,12 +39,15 @@ def validate_url(url: str) -> bool:
     
     url = url.strip()
     
-    # Strict regex: only http:// or https://
+    # Relaxed regex: allows http:// or https:// with various host formats
+    # - Domain with TLD (example.com)
+    # - Hostname without TLD (intranet, server1)
+    # - localhost
+    # - IPv4 addresses
     pattern = re.compile(
         r'^https?://'  # http:// or https:// ONLY
         r'(?:'
-            r'(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,63}\.?'  # Domain
-            r'|localhost'  # or localhost
+            r'(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)*[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?'  # Any hostname
             r'|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'  # or IPv4
         r')'
         r'(?::\d{1,5})?'  # Optional port

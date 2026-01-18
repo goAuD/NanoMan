@@ -36,6 +36,19 @@ class TestURLValidation(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertTrue(validate_url(url), f"Should be valid: {url}")
     
+    def test_valid_intranet_urls(self):
+        """Test intranet URLs without TLD pass validation (v1.2.0 feature)."""
+        valid_urls = [
+            "http://intranet",
+            "http://intranet/api",
+            "http://server1:8080/data",
+            "http://myserver/api/v1/users",
+            "https://internal-api:3000",
+        ]
+        for url in valid_urls:
+            with self.subTest(url=url):
+                self.assertTrue(validate_url(url), f"Should be valid: {url}")
+    
     def test_invalid_protocols_rejected(self):
         """Security: Non-HTTP protocols must be rejected."""
         dangerous_urls = [
