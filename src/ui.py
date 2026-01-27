@@ -14,6 +14,12 @@ from datetime import datetime
 from pathlib import Path
 
 from src.logic import validate_url, send_api_request, format_json, parse_headers
+from src.presets import (
+    AUTH_PRESETS, API_TEMPLATES, 
+    get_auth_preset_names, get_api_template_names,
+    get_auth_preset_by_name, get_api_template_by_name,
+)
+from version import VERSION
 
 # Import Nano Design System
 try:
@@ -29,12 +35,22 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-VERSION = "1.2.1"
-
 # Constants
 MAX_HIGHLIGHT_LINES = 1000  # Performance limit for syntax highlighting
 MAX_HISTORY_ITEMS = 100  # Max items to persist
-HISTORY_FILE = Path(__file__).parent.parent / "history.json"
+
+
+def get_config_dir() -> Path:
+    """Get user config directory (~/.nanoman/)."""
+    if os.name == 'nt':  # Windows
+        config_dir = Path(os.environ.get('USERPROFILE', Path.home())) / '.nanoman'
+    else:  # Linux/Mac
+        config_dir = Path.home() / '.nanoman'
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
+HISTORY_FILE = get_config_dir() / "history.json"
 
 # Nano Design System Colors (from nano_theme.py)
 COLORS = {
@@ -45,6 +61,7 @@ COLORS = {
     "primary": NANO_COLORS.get("primary", "#3498db"),
     "muted": NANO_COLORS.get("text_muted", "gray"),
     "link": NANO_COLORS.get("text_link", "#00CED1"),
+    "special": NANO_COLORS.get("accent_purple", "#9b59b6"),  # For Presets/History tabs
 }
 
 
@@ -124,15 +141,15 @@ class NanoManApp(ctk.CTk):
         )
         self.opt_method.grid(row=0, column=0, padx=10, pady=10)
         
-        # URL entry
+        # URL entry (empty by default - offline first)
         self.entry_url = ctk.CTkEntry(
             self.control_frame, 
-            placeholder_text="Enter API URL (e.g., https://api.example.com/data)",
+            placeholder_text="Enter API URL (e.g., http://localhost:8080/api)",
             height=40,
             font=("Consolas", 13)
         )
         self.entry_url.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
-        self.entry_url.insert(0, "https://chseets.com/api/meta.json")
+        # No default value - placeholder is sufficient
         
         # Bind Enter key to send
         self.entry_url.bind("<Return>", lambda e: self.send_request_thread())
@@ -168,23 +185,51 @@ class NanoManApp(ctk.CTk):
         self.tab_bar.grid(row=2, column=0, padx=20, pady=(10, 0), sticky="ew")
         
         self.tab_buttons = {}
-        tabs = [
+        
+        # Main tabs (blue theme)
+        main_tabs = [
             ("response", "Response"),
             ("body", "Request Body"),
             ("headers", "Headers"),
-            ("history", "History")
         ]
         
-        for i, (key, label) in enumerate(tabs):
+        # Special tabs (purple theme - logically separate)
+        special_tabs = [
+            ("presets", "Presets"),
+            ("history", "History"),
+        ]
+        
+        for key, label in main_tabs:
             btn = ctk.CTkButton(
                 self.tab_bar,
                 text=label,
-                width=120,
+                width=110,
                 height=32,
                 font=("Roboto", 12),
-                fg_color="#2c3e50" if key != "response" else "#3498db",
+                fg_color="#3498db" if key == "response" else "#2c3e50",
                 hover_color="#34495e",
                 corner_radius=8,
+                anchor="center",
+                command=lambda k=key: self.switch_tab(k)
+            )
+            btn.pack(side="left", padx=3)
+            self.tab_buttons[key] = btn
+        
+        # Spacer to push special tabs to the right
+        spacer = ctk.CTkLabel(self.tab_bar, text="", width=20)
+        spacer.pack(side="left", expand=True)
+        
+        for key, label in special_tabs:
+            btn = ctk.CTkButton(
+                self.tab_bar,
+                text=label,
+                width=110,
+                height=32,
+                font=("Roboto", 12),
+                fg_color=COLORS["special"],  # Purple for special tabs
+                hover_color="#8e44ad",
+                corner_radius=8,
+                anchor="center",
                 command=lambda k=key: self.switch_tab(k)
             )
             btn.pack(side="left", padx=3)
@@ -200,6 +245,7 @@ class NanoManApp(ctk.CTk):
         self._create_response_content()
         self._create_body_content()
         self._create_headers_content()
+        self._create_presets_content()
         self._create_history_content()
         
         # 5. Status bar
@@ -237,7 +283,7 @@ class NanoManApp(ctk.CTk):
             wrap="word"
         )
         self.txt_response.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.txt_response.insert("0.0", "// Response will appear here\n// Press SEND or Enter to make a request\n\n// Try the chseets API:\n// https://chseets.com/api/meta.json\n// https://chseets.com/api/sheets/weiz.json")
+        self.txt_response.insert("0.0", "// Response will appear here\n// Press SEND or Enter to make a request\n\n// Quick start:\n// 1. Enter a URL or use Presets tab for templates\n// 2. Select HTTP method\n// 3. Press SEND or Enter\n\n// Try these test APIs:\n// https://httpbin.org/get\n// https://jsonplaceholder.typicode.com/posts/1")
     
     def _create_body_content(self):
         """Create request body tab content."""
@@ -271,6 +317,251 @@ class NanoManApp(ctk.CTk):
         
         self.headers_frame.grid_remove()  # Hide initially
     
+    def _create_presets_content(self):
+        """Create presets tab content with auth presets and API templates."""
+        self.presets_frame = ctk.CTkScrollableFrame(self.content_frame)
+        self.presets_frame.grid(row=0, column=0, sticky="nsew")
+        self.presets_frame.grid_columnconfigure(0, weight=1)
+        self.presets_frame.grid_columnconfigure(1, weight=1)
+        
+        # Left side: Auth Presets
+        auth_section = ctk.CTkFrame(self.presets_frame)
+        auth_section.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        
+        ctk.CTkLabel(
+            auth_section,
+            text="Auth Presets",
+            font=("Roboto", 14, "bold"),
+            text_color=COLORS["special"]
+        ).pack(pady=(10, 5))
+        
+        ctk.CTkLabel(
+            auth_section,
+            text="Select an auth method to apply headers",
+            font=("Roboto", 11),
+            text_color="gray"
+        ).pack(pady=(0, 10))
+        
+        self.auth_preset_var = ctk.StringVar(value="No Auth")
+        self.auth_dropdown = ctk.CTkOptionMenu(
+            auth_section,
+            values=get_auth_preset_names(),
+            variable=self.auth_preset_var,
+            width=200,
+            fg_color=COLORS["special"],
+            button_color="#8e44ad",
+            button_hover_color="#7d3c98",
+            command=self._apply_auth_preset
+        )
+        self.auth_dropdown.pack(pady=5)
+        
+        self.auth_desc_label = ctk.CTkLabel(
+            auth_section,
+            text="No authentication required",
+            font=("Roboto", 10),
+            text_color="gray",
+            wraplength=250
+        )
+        self.auth_desc_label.pack(pady=(5, 10))
+        
+        # Right side: API Templates
+        template_section = ctk.CTkFrame(self.presets_frame)
+        template_section.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        
+        ctk.CTkLabel(
+            template_section,
+            text="API Templates",
+            font=("Roboto", 14, "bold"),
+            text_color=COLORS["special"]
+        ).pack(pady=(10, 5))
+        
+        ctk.CTkLabel(
+            template_section,
+            text="Click to load template URL and auth",
+            font=("Roboto", 11),
+            text_color="gray"
+        ).pack(pady=(0, 10))
+        
+        # Template buttons
+        for name in get_api_template_names():
+            template = get_api_template_by_name(name)
+            btn = ctk.CTkButton(
+                template_section,
+                text=name,
+                width=220,
+                height=35,
+                font=("Roboto", 11),
+                fg_color="#2c3e50",
+                hover_color="#34495e",
+                anchor="center",
+                command=lambda t=template: self._apply_api_template(t)
+            )
+            btn.pack(pady=2, padx=10)
+        
+        # Example endpoints section (below templates)
+        self.template_examples_frame = ctk.CTkFrame(self.presets_frame)
+        self.template_examples_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=5, pady=10)
+        
+        self.template_examples_label = ctk.CTkLabel(
+            self.template_examples_frame,
+            text="Select a template to see example endpoints",
+            font=("Roboto", 11),
+            text_color="gray"
+        )
+        self.template_examples_label.pack(pady=10)
+        
+        self.presets_frame.grid_remove()  # Hide initially
+    
+    def _apply_auth_preset(self, preset_name: str):
+        """Apply selected auth preset to headers."""
+        preset = get_auth_preset_by_name(preset_name)
+        if preset and preset.get("headers"):
+            # Get current headers
+            current = self.txt_headers.get("0.0", "end").strip()
+            new_headers = []
+            
+            # Parse existing headers, remove Authorization if present
+            for line in current.split('\n'):
+                if ':' in line:
+                    key = line.split(':', 1)[0].strip().lower()
+                    if key not in ('authorization', 'x-api-key'):
+                        new_headers.append(line)
+            
+            # Add preset headers
+            for key, value in preset["headers"].items():
+                new_headers.append(f"{key}: {value}")
+            
+            # Update headers textbox
+            self.txt_headers.delete("0.0", "end")
+            self.txt_headers.insert("0.0", '\n'.join(new_headers))
+            
+            # Update description
+            desc = preset.get("description", "")
+            if preset.get("docs"):
+                desc += f"\nDocs: {preset['docs']}"
+            self.auth_desc_label.configure(text=desc)
+            
+            self.lbl_status.configure(
+                text=f"Applied auth preset: {preset_name}",
+                text_color=COLORS["special"]
+            )
+        else:
+            self.auth_desc_label.configure(text="No authentication required")
+    
+    def _apply_api_template(self, template: dict):
+        """Apply API template to URL, method, and optionally auth."""
+        base_url = template.get("base_url", "")
+        
+        # Set URL to first example or base URL
+        examples = template.get("examples", [])
+        if examples:
+            first_example = examples[0]
+            url = base_url + first_example.get("path", "")
+            method = first_example.get("method", "GET")
+        else:
+            url = base_url
+            method = "GET"
+        
+        # Update URL
+        self.entry_url.delete(0, "end")
+        self.entry_url.insert(0, url)
+        
+        # Update method
+        self.method_var.set(method)
+        
+        # Apply auth preset if specified
+        auth_key = template.get("auth", "none")
+        if auth_key in AUTH_PRESETS:
+            preset = AUTH_PRESETS[auth_key]
+            self.auth_preset_var.set(preset["name"])
+            self._apply_auth_preset(preset["name"])
+        
+        # Update examples display
+        self._show_template_examples(template)
+        
+        self.lbl_status.configure(
+            text=f"Loaded template: {template.get('name', 'Unknown')}",
+            text_color=COLORS["special"]
+        )
+    
+    def _show_template_examples(self, template: dict):
+        """Show example endpoints for selected template."""
+        # Clear existing content
+        for widget in self.template_examples_frame.winfo_children():
+            widget.destroy()
+        
+        # Header
+        ctk.CTkLabel(
+            self.template_examples_frame,
+            text=f"{template.get('name', 'API')} - Example Endpoints",
+            font=("Roboto", 12, "bold"),
+            text_color=COLORS["link"]
+        ).pack(pady=(10, 5))
+        
+        if template.get("docs"):
+            ctk.CTkLabel(
+                self.template_examples_frame,
+                text=f"Docs: {template['docs']}",
+                font=("Roboto", 10),
+                text_color="gray"
+            ).pack()
+        
+        # Example buttons
+        examples = template.get("examples", [])
+        for example in examples:
+            btn_frame = ctk.CTkFrame(self.template_examples_frame, fg_color="transparent")
+            btn_frame.pack(fill="x", padx=10, pady=2)
+            
+            method = example.get("method", "GET")
+            path = example.get("path", "/")
+            desc = example.get("desc", "")
+            
+            # Method badge color
+            method_color = {
+                "GET": COLORS["primary"],
+                "POST": COLORS["success"],
+                "PUT": COLORS["warning"],
+                "PATCH": COLORS["warning"],
+                "DELETE": COLORS["danger"],
+            }.get(method, COLORS["neutral"])
+            
+            ctk.CTkLabel(
+                btn_frame,
+                text=method,
+                font=("Consolas", 10, "bold"),
+                text_color=method_color,
+                width=50
+            ).pack(side="left")
+            
+            btn = ctk.CTkButton(
+                btn_frame,
+                text=f"{path}  -  {desc}",
+                font=("Consolas", 10),
+                fg_color="transparent",
+                hover_color="#34495e",
+                text_color="white",
+                anchor="w",
+                command=lambda t=template, e=example: self._load_example(t, e)
+            )
+            btn.pack(side="left", fill="x", expand=True)
+    
+    def _load_example(self, template: dict, example: dict):
+        """Load a specific example endpoint."""
+        base_url = template.get("base_url", "")
+        path = example.get("path", "")
+        method = example.get("method", "GET")
+        
+        self.entry_url.delete(0, "end")
+        self.entry_url.insert(0, base_url + path)
+        self.method_var.set(method)
+        
+        self.switch_tab("response")
+        self.lbl_status.configure(
+            text=f"Loaded: {method} {path}",
+            text_color=COLORS["primary"]
+        )
+
+    
     def _create_history_content(self):
         """Create history tab content."""
         self.history_frame = ctk.CTkScrollableFrame(self.content_frame)
@@ -290,17 +581,30 @@ class NanoManApp(ctk.CTk):
         """Switch between tabs."""
         self.current_tab = tab_key
         
+        # Define which tabs are "special" (purple theme)
+        special_tabs = {"presets", "history"}
+        main_tabs = {"response", "body", "headers"}
+        
         # Update button colors
         for key, btn in self.tab_buttons.items():
             if key == tab_key:
-                btn.configure(fg_color="#3498db")
+                # Active tab gets highlighted
+                if key in special_tabs:
+                    btn.configure(fg_color="#8e44ad")  # Darker purple for active
+                else:
+                    btn.configure(fg_color="#3498db")  # Blue for active main tabs
             else:
-                btn.configure(fg_color="#2c3e50")
+                # Inactive tabs
+                if key in special_tabs:
+                    btn.configure(fg_color=COLORS["special"])  # Purple for special
+                else:
+                    btn.configure(fg_color="#2c3e50")  # Gray for main tabs
         
         # Hide all frames
         self.response_frame.grid_remove()
         self.body_frame.grid_remove()
         self.headers_frame.grid_remove()
+        self.presets_frame.grid_remove()
         self.history_frame.grid_remove()
         
         # Show selected frame
@@ -310,6 +614,8 @@ class NanoManApp(ctk.CTk):
             self.body_frame.grid()
         elif tab_key == "headers":
             self.headers_frame.grid()
+        elif tab_key == "presets":
+            self.presets_frame.grid()
         elif tab_key == "history":
             self.history_frame.grid()
     
@@ -372,7 +678,13 @@ class NanoManApp(ctk.CTk):
         self.lbl_status.configure(text="Response cleared.", text_color="gray")
     
     def add_to_history(self, method: str, url: str, status_code: int, elapsed: float):
-        """Add a request to history."""
+        """
+        Add a request to history.
+        
+        Security Note: Only method, URL, status, elapsed time, and timestamp are saved.
+        Headers and request body are intentionally NOT persisted to prevent
+        leaking sensitive data (Authorization tokens, API keys, etc.).
+        """
         # Remove empty label if exists
         if hasattr(self, 'lbl_history_empty') and self.lbl_history_empty.winfo_exists():
             self.lbl_history_empty.destroy()

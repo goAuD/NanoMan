@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 NanoMan - Offline API Testing Client
-Version 1.0.0 | Part of the Nano Product Family
+Part of the Nano Product Family
 
 A lightweight, privacy-focused API testing tool.
 No cloud, no bloat, just requests.
@@ -14,3 +14,4 @@ from src.ui import main
 
 if __name__ == "__main__":
     main()
+

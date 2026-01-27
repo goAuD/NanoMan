@@ -17,9 +17,10 @@ NanoMan is a lightweight, privacy-focused API testing tool. No cloud, no bloat, 
 * **Full HTTP Support:** GET, POST, PUT, PATCH, DELETE methods
 * **JSON Syntax Highlighting:** Color-coded JSON responses (keys, strings, numbers)
 * **Request History:** Review and load previous requests with one click
+* **Auth Presets:** Quick setup for Bearer, Basic Auth, API Key authentication
+* **API Templates:** Pre-configured templates for Graph API, GitHub, HTTPBin, and more
 * **Threaded Requests:** UI never freezes, even on slow connections
-* **Security Focused:** Strict URL validation (HTTP/HTTPS only)
-* **Request Counter:** Track your session usage
+* **Security Focused:** Strict URL validation, no sensitive data in history
 
 ## Use Cases
 
@@ -63,22 +64,57 @@ python main.py
 2. Enter API URL
 3. (Optional) Add request body JSON in "Request Body" tab
 4. (Optional) Add custom headers in "Headers" tab
-5. Click **SEND** or press **Enter**
+5. (Optional) Use "Presets" tab for quick auth setup or API templates
+6. Click **SEND** or press **Enter**
+
+### Presets Tab
+
+The Presets tab provides quick access to:
+
+**Auth Presets:**
+| Preset | Description |
+|--------|-------------|
+| No Auth | No authentication |
+| Bearer Token | JWT / OAuth2 tokens |
+| Basic Auth | Base64 username:password |
+| API Key (Header) | X-Api-Key header |
+| API Key (Authorization) | Authorization header |
+
+**API Templates:**
+| Template | Base URL |
+|----------|----------|
+| Localhost | `http://localhost:8080` |
+| Microsoft Graph API | `https://graph.microsoft.com/v1.0` |
+| GitHub API | `https://api.github.com` |
+| JSONPlaceholder | `https://jsonplaceholder.typicode.com` |
+| HTTPBin | `https://httpbin.org` |
+| ReqRes | `https://reqres.in/api` |
 
 ## Project Structure
 
 ```
 NanoMan/
 ├── main.py              # Entry point
+├── version.py           # Version definition
+├── nano_theme.py        # Nano Design System
 ├── requirements.txt     # Dependencies
 ├── src/
 │   ├── __init__.py
 │   ├── logic.py         # Business logic (API, validation)
+│   ├── presets.py       # Auth presets & API templates
 │   └── ui.py            # CustomTkinter UI
 └── tests/
     ├── __init__.py
-    └── test_logic.py    # Unit tests (9 tests)
+    └── test_logic.py    # Unit tests
 ```
+
+## Data Storage
+
+Request history is stored in your user config directory:
+- **Windows:** `%USERPROFILE%\.nanoman\history.json`
+- **Linux/macOS:** `~/.nanoman/history.json`
+
+**Security:** Only method, URL, status code, and timing are saved. Headers and request body are never persisted to prevent leaking sensitive data.
 
 ## Security
 
@@ -87,6 +123,7 @@ NanoMan/
 | XSS via URL | Only `http://` and `https://` allowed |
 | JavaScript injection | `javascript:` URLs rejected |
 | File access | `file://` URLs rejected |
+| Credential leaks | Headers/body not saved to history |
 | Request hanging | 10 second timeout |
 | UI freeze | Threaded requests |
 
@@ -114,7 +151,7 @@ NanoMan/
 ## Running Tests
 
 ```bash
-python -c "import sys; sys.path.insert(0, '.'); from tests.test_logic import *; import unittest; unittest.main(module='tests.test_logic', verbosity=2, exit=False)"
+python -m pytest tests/ -v
 ```
 
 ## Part of Nano Product Family
@@ -124,3 +161,4 @@ This tool uses the [Nano Design System](https://github.com/goAuD/NanoServer/blob
 ## License
 
 MIT License
+
